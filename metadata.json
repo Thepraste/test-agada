@@ -1,0 +1,6 @@
+{
+  "name": "The Agada Initiative",
+  "description": "Empowering women and youths through education, digital literacy, entrepreneurship, advocacy, and mentorship.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
