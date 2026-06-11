@@ -10,6 +10,8 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, getDocs, doc, setDoc } from "firebase/firestore";
 
 // Load environment variables
 dotenv.config();
@@ -37,6 +39,99 @@ if (!fs.existsSync(dbFilePath)) {
   }, null, 2), "utf-8");
 }
 
+// -----------------------------------------------------------------
+// FIREBASE FIRESTORE SYNC & PERSISTENCE MANAGEMENT ENGINE
+// -----------------------------------------------------------------
+enum OperationType {
+  CREATE = "create",
+  UPDATE = "update",
+  DELETE = "delete",
+  LIST = "list",
+  GET = "get",
+  WRITE = "write",
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: "Server-Agent",
+      email: "praiseoti3@gmail.com",
+      emailVerified: true,
+      isAnonymous: false
+    },
+    operationType,
+    path
+  };
+  console.error("[Firebase] Firestore Error: ", JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+let db: any = null;
+try {
+  const configPath = path.join(rootDir, "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const firebaseApp = initializeApp(firebaseConfig);
+    db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    console.log(`[Firebase] Initialized connection successfully! Database ID: ${firebaseConfig.firestoreDatabaseId}`);
+  } else {
+    console.warn("[Firebase] Warning: firebase-applet-config.json was not found at root.");
+  }
+} catch (error) {
+  console.error("[Firebase] Fatal initialization exception:", error);
+}
+
+// Write helper for cloud sync writes
+async function saveToFirestore(collectionPath: string, docId: string, record: any) {
+  if (!db) {
+    console.warn(`[Firebase] Cloud offline - skipping Firestore write for '${collectionPath}/${docId}'`);
+    return;
+  }
+  try {
+    const docRef = doc(db, collectionPath, docId);
+    await setDoc(docRef, record);
+    console.log(`[Firebase] Successfully mirrored '${collectionPath}/${docId}' into cloud Firestore.`);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${collectionPath}/${docId}`);
+  }
+}
+
+// Read helper for cloud sync batch queries
+async function fetchFromFirestore(collectionPath: string): Promise<any[]> {
+  if (!db) return [];
+  try {
+    const colRef = collection(db, collectionPath);
+    const snap = await getDocs(colRef);
+    const results: any[] = [];
+    snap.forEach((docSnap) => {
+      results.push(docSnap.data());
+    });
+    // Sort by createdAt descending
+    results.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
+    return results;
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.LIST, collectionPath);
+    return [];
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -48,21 +143,91 @@ async function startServer() {
   // ==========================================
   // 1. BACKEND ROUTE: READ SYSTEM DATABASE (ADMIN USE)
   // ==========================================
-  app.get("/api/admin/submissions", (req, res) => {
+  app.get("/api/admin/submissions", async (req, res) => {
     try {
-      if (!fs.existsSync(dbFilePath)) {
-        return res.json({
-          volunteers: [],
-          donations: [],
-          partnerships: [],
-          program_applications: [],
-          contacts: [],
-          newsletters: []
-        });
+      // 1. Core local storage fallback file backup reading
+      let localDB: any = {
+        volunteers: [],
+        donations: [],
+        partnerships: [],
+        program_applications: [],
+        contacts: [],
+        newsletters: []
+      };
+      if (fs.existsSync(dbFilePath)) {
+        try {
+          const rawData = fs.readFileSync(dbFilePath, "utf-8");
+          localDB = JSON.parse(rawData);
+        } catch (e) {
+          console.error("Local submissions.json read exception:", e);
+        }
       }
-      const rawData = fs.readFileSync(dbFilePath, "utf-8");
-      const data = JSON.parse(rawData);
-      res.json(data);
+
+      // 2. Fetch live data from Firestore cloud database (if initialized)
+      if (db) {
+        console.log("[Firebase] Refreshing and synchronizing cloud collections with Express admin panel...");
+        const [volunteers, donations, partnerships, program_applications, contacts, newsletters] = await Promise.all([
+          fetchFromFirestore("volunteers").catch(() => []),
+          fetchFromFirestore("donations").catch(() => []),
+          fetchFromFirestore("partnerships").catch(() => []),
+          fetchFromFirestore("program_applications").catch(() => []),
+          fetchFromFirestore("contacts").catch(() => []),
+          fetchFromFirestore("newsletters").catch(() => [])
+        ]);
+
+        // Helper to combine lists, deduping by submission unique ID reference
+        const mergeLists = (localList: any[], cloudList: any[]) => {
+          const map = new Map();
+          (localList || []).forEach(item => {
+            if (item && item.id) map.set(item.id, item);
+          });
+          (cloudList || []).forEach(item => {
+            if (item && item.id) map.set(item.id, item);
+          });
+          return Array.from(map.values()).sort((a, b) => {
+            const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return dateB - dateA;
+          });
+        };
+
+        const mergeNewsletters = (localList: any[], cloudList: any[]) => {
+          const map = new Map();
+          (localList || []).forEach(item => {
+            const m = item && (item.email || item.subscriberEmail);
+            if (m) map.set(m, item);
+          });
+          (cloudList || []).forEach(item => {
+            const m = item && (item.email || item.subscriberEmail);
+            if (m) map.set(m, item);
+          });
+          return Array.from(map.values()).sort((a, b) => {
+            const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return dateB - dateA;
+          });
+        };
+
+        const merged = {
+          volunteers: mergeLists(localDB.volunteers, volunteers),
+          donations: mergeLists(localDB.donations, donations),
+          partnerships: mergeLists(localDB.partnerships, partnerships),
+          program_applications: mergeLists(localDB.program_applications, program_applications),
+          contacts: mergeLists(localDB.contacts, contacts),
+          newsletters: mergeNewsletters(localDB.newsletters, newsletters)
+        };
+
+        // Cache the merged database back to submissions.json so both models are in high-fidelity harmony
+        try {
+          fs.writeFileSync(dbFilePath, JSON.stringify(merged, null, 2), "utf-8");
+        } catch (e) {
+          console.error("Local DB sync update execution failed:", e);
+        }
+
+        return res.json(merged);
+      }
+
+      res.json(localDB);
     } catch (error: any) {
       console.error("Error reading admin submissions DB:", error);
       res.status(500).json({ success: false, message: "Internal server error" });
@@ -136,29 +301,53 @@ async function startServer() {
       sanitizedData.status = "Pending";
     }
 
-    // B. Server-Side Storage State Synchronization
+    // B. Server-Side Storage State Synchronization & Cloud Firestore Mirroring
     try {
       const rawDB = fs.readFileSync(dbFilePath, "utf-8");
-      const db = JSON.parse(rawDB);
+      const localDB = JSON.parse(rawDB);
 
+      // Determine Firestore collection path and newsletter keys
+      let collectionPath = "";
       if (formType === "Volunteer / Intern Application") {
-        db.volunteers.push(sanitizedData);
+        localDB.volunteers.push(sanitizedData);
+        collectionPath = "volunteers";
       } else if (formType === "Donation / Contribution") {
-        db.donations.push(sanitizedData);
+        localDB.donations.push(sanitizedData);
+        collectionPath = "donations";
       } else if (formType === "Partnership Proposal") {
-        db.partnerships.push(sanitizedData);
+        localDB.partnerships.push(sanitizedData);
+        collectionPath = "partnerships";
       } else if (formType === "Program Hub Admission") {
-        db.program_applications.push(sanitizedData);
+        localDB.program_applications.push(sanitizedData);
+        collectionPath = "program_applications";
       } else if (formType === "Direct Contact Inquiry") {
-        db.contacts.push(sanitizedData);
+        localDB.contacts.push(sanitizedData);
+        collectionPath = "contacts";
       } else if (formType === "Weekly Newsletter Subscription") {
-        db.newsletters.push(sanitizedData);
+        localDB.newsletters.push(sanitizedData);
+        collectionPath = "newsletters";
+        const emailVal = sanitizedData.email || sanitizedData.subscriberEmail;
+        if (!sanitizedData.id && emailVal) {
+          sanitizedData.id = emailVal;
+        }
       }
 
-      fs.writeFileSync(dbFilePath, JSON.stringify(db, null, 2), "utf-8");
-      console.log(`[Form Database Realtime Sync] New record stored under "${formType}"`);
+      fs.writeFileSync(dbFilePath, JSON.stringify(localDB, null, 2), "utf-8");
+      console.log(`[Local Sync] Saved record to local fallback file for form type: ${formType}`);
+
+      // Perform background async Firestore cloud synchronization
+      if (collectionPath) {
+        const documentId = sanitizedData.id;
+        saveToFirestore(collectionPath, documentId, sanitizedData)
+          .then(() => {
+            console.log(`[Firebase Sync] Successfully logged '${formType}' record under document ID: ${documentId}`);
+          })
+          .catch((fsErr) => {
+            console.error(`[Firebase Sync] Cloud error for ${formType}:`, fsErr);
+          });
+      }
     } catch (err) {
-      console.error("Failed to commit submission to local backend db storage config:", err);
+      console.error("Failed to commit submission to database storage:", err);
     }
 
     // C. Mail Dispatching to Operations Lead: praiseoti3@gmail.com

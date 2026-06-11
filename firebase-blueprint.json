@@ -1,0 +1,123 @@
+{
+  "entities": {
+    "volunteer": {
+      "title": "Volunteer Application",
+      "description": "A volunteer or intern application submission",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "interests": { "type": "array" },
+        "availability": { "type": "string" },
+        "motivation": { "type": "string" },
+        "type": { "type": "string", "enum": ["Volunteer", "Intern"] },
+        "status": { "type": "string", "enum": ["Pending", "Onboarding Scheduled", "Approved"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fullName", "email", "phone", "motivation", "type", "status", "createdAt"]
+    },
+    "donation": {
+      "title": "Donation",
+      "description": "A donation/contribution transaction",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "donorName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "amount": { "type": "integer" },
+        "allocation": { "type": "string" },
+        "paymentMethod": { "type": "string", "enum": ["Bank Transfer", "Credit Card", "USSD", "QR Scanner"] },
+        "status": { "type": "string", "enum": ["Pending Verification", "Completed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "email", "amount", "allocation", "paymentMethod", "status", "createdAt"]
+    },
+    "partnership": {
+      "title": "Partnership Proposal",
+      "description": "A company or organizational sponsorship/partnership proposal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgName": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "partnershipType": { "type": "string" },
+        "proposal": { "type": "string" },
+        "status": { "type": "string", "enum": ["Reviewing", "Accepted"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgName", "contactPerson", "email", "phone", "partnershipType", "proposal", "status", "createdAt"]
+    },
+    "program_application": {
+      "title": "Program Admission Application",
+      "description": "A youth or woman application for a training or hub course",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "programId": { "type": "string" },
+        "appliedProgramTitle": { "type": "string" },
+        "educationLevel": { "type": "string" },
+        "motivation": { "type": "string" },
+        "status": { "type": "string", "enum": ["Applied", "Interview Scheduled", "Admitted"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fullName", "email", "phone", "programId", "educationLevel", "motivation", "status", "createdAt"]
+    },
+    "contact": {
+      "title": "Direct Contact Inquiry",
+      "description": "A regular feedback or contact form inquiry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "subject", "message", "createdAt"]
+    },
+    "newsletter": {
+      "title": "Newsletter Subscription",
+      "description": "An email subscription to weekly news",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/volunteers/{volunteerId}": {
+      "schema": "volunteer",
+      "description": "Collection of volunteer or intern submissions"
+    },
+    "/donations/{donationId}": {
+      "schema": "donation",
+      "description": "Collection of donor financial contributions"
+    },
+    "/partnerships/{partnershipId}": {
+      "schema": "partnership",
+      "description": "Collection of corporate joint partnership proposals"
+    },
+    "/program_applications/{applicationId}": {
+      "schema": "program_application",
+      "description": "Collection of course hub student admissions"
+    },
+    "/contacts/{contactId}": {
+      "schema": "contact",
+      "description": "Collection of general contact queries"
+    },
+    "/newsletters/{emailHash}": {
+      "schema": "newsletter",
+      "description": "Collection of unique mail newsletter subscriptions"
+    }
+  }
+}
